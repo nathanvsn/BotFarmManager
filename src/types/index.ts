@@ -420,11 +420,21 @@ export interface BatchActionResponse extends BaseResponse {
 }
 
 // ============================================
+// Auth Types
+// ============================================
+
+export interface AuthCredentials {
+    email: string;
+    password: string;
+}
+
+// ============================================
 // Bot Configuration
 // ============================================
 
 export interface BotConfig {
-    phpSessionId: string;
+    phpSessionId?: string;
+    credentials?: AuthCredentials;
     checkIntervalMs: number;
     siloSellThreshold: number;
     debug: boolean;

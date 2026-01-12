@@ -22,7 +22,7 @@ export class FarmBot {
     constructor(config: BotConfig) {
         this.config = config;
         this.logger = new Logger('FarmBot', config.debug);
-        this.api = new ApiClient(config.phpSessionId, this.logger);
+        this.api = new ApiClient(config.phpSessionId!, this.logger);
 
         // Inicializar serviços
         this.farmService = new FarmService(this.api, this.logger);

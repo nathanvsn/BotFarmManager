@@ -6,20 +6,39 @@ import 'dotenv/config';
 import { FarmBot } from './bot/FarmBot';
 import { BotConfig } from './types';
 import { Logger } from './utils/logger';
+import { AuthService } from './services/AuthService';
 
 const logger = new Logger('Main');
 
 // Carregar configuração do ambiente
-function loadConfig(): BotConfig {
-    const phpSessionId = process.env.PHPSESSID;
+async function loadConfig(): Promise<BotConfig> {
+    const email = process.env.FARM_EMAIL;
+    const password = process.env.FARM_PASSWORD;
+    const manualSessionId = process.env.PHPSESSID;
 
-    if (!phpSessionId) {
-        logger.error('PHPSESSID não configurado! Configure no arquivo .env');
+    let phpSessionId: string | undefined;
+
+    // Prioridade: login automático > sessão manual
+    if (email && password) {
+        const authService = new AuthService();
+        try {
+            phpSessionId = await authService.login(email, password);
+        } catch (error) {
+            logger.error('Falha no login automático', error as Error);
+            process.exit(1);
+        }
+    } else if (manualSessionId) {
+        logger.info('📋 Usando PHPSESSID manual do .env');
+        phpSessionId = manualSessionId;
+    } else {
+        logger.error('❌ Nenhuma credencial configurada!');
+        logger.error('Configure FARM_EMAIL e FARM_PASSWORD ou PHPSESSID no arquivo .env');
         process.exit(1);
     }
 
     return {
         phpSessionId,
+        credentials: email && password ? { email, password } : undefined,
         checkIntervalMs: parseInt(process.env.CHECK_INTERVAL_MS || '60000', 10),
         siloSellThreshold: parseInt(process.env.SILO_SELL_THRESHOLD || '90', 10),
         debug: process.env.DEBUG === 'true',
@@ -33,7 +52,7 @@ async function main(): Promise<void> {
     logger.info('   Automatizando suas fazendas com inteligência!');
     logger.info('═══════════════════════════════════════════════════════');
 
-    const config = loadConfig();
+    const config = await loadConfig();
     logger.info(`Debug mode: ${config.debug ? 'ON' : 'OFF'}`);
 
     const bot = new FarmBot(config);
