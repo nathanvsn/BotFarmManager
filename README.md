@@ -86,7 +86,7 @@ PHPSESSID=seu_session_id_aqui
 
 3. **Colar no `.env`:**
    ```env
-   PHPSESSID=f822tlif9cn4g15udj3bhln8t1
+   PHPSESSID=xxxxxxxxxxxxxxxxxx
    ```
 
 > ⚠️ **Nota:** O PHPSESSID pode expirar. Se o bot parar de funcionar, intercepte um novo.
