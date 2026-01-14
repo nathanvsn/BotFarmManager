@@ -14,13 +14,54 @@ import {
 } from '../types';
 import { Logger } from '../utils/logger';
 
+// Constante: tempo mínimo entre colheitas (6 horas em milissegundos)
+const MIN_HARVEST_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
 export class FarmService {
     private api: ApiClient;
     private logger: Logger;
 
+    // Cache de colheitas: userFarmlandId -> timestamp da última colheita
+    private harvestCache: Map<number, number> = new Map();
+
     constructor(api: ApiClient, logger: Logger) {
         this.api = api;
         this.logger = logger;
+    }
+
+    /**
+     * Registra uma colheita realizada para o filtro de 6 horas
+     */
+    recordHarvest(userFarmlandId: number): void {
+        this.harvestCache.set(userFarmlandId, Date.now());
+        this.logger.debugLog(`[HarvestCache] Registrada colheita para userFarmlandId ${userFarmlandId}`);
+    }
+
+    /**
+     * Verifica se uma colheita pode ser realizada (passou 6 horas desde a última)
+     */
+    canHarvest(userFarmlandId: number): boolean {
+        const lastHarvest = this.harvestCache.get(userFarmlandId);
+        if (!lastHarvest) {
+            return true; // Nunca foi colhido nesta sessão
+        }
+
+        const elapsed = Date.now() - lastHarvest;
+        return elapsed >= MIN_HARVEST_INTERVAL_MS;
+    }
+
+    /**
+     * Retorna quanto tempo falta para poder colher novamente (em minutos)
+     */
+    getTimeUntilCanHarvest(userFarmlandId: number): number {
+        const lastHarvest = this.harvestCache.get(userFarmlandId);
+        if (!lastHarvest) {
+            return 0;
+        }
+
+        const elapsed = Date.now() - lastHarvest;
+        const remaining = MIN_HARVEST_INTERVAL_MS - elapsed;
+        return Math.max(0, Math.ceil(remaining / (60 * 1000))); // em minutos
     }
 
     /**
@@ -70,6 +111,7 @@ export class FarmService {
     /**
      * Extrai tarefas de colheita da resposta da API
      * Estrutura: farms[farmId].farmlands[cropTypeId].data[farmlandId]
+     * Aplica filtro de 6 horas para evitar colher terras recentemente colhidas
      */
     private extractHarvestTasks(farms: Record<string, any>): AvailableTask[] {
         const tasks: AvailableTask[] = [];
@@ -91,6 +133,15 @@ export class FarmService {
                     const fl = farmland as any;
 
                     if (fl.canHarvest === 1) {
+                        // Verificar filtro de 6 horas
+                        if (!this.canHarvest(fl.id)) {
+                            const timeRemaining = this.getTimeUntilCanHarvest(fl.id);
+                            this.logger.debugLog(
+                                `[Harvest] ⏱️ Ignorando "${fl.farmlandName}" - última colheita há menos de 6h (faltam ${timeRemaining}min)`
+                            );
+                            continue;
+                        }
+
                         this.logger.debugLog(`[Harvest] Encontrada colheita: ${fl.farmlandName} (${fl.area}ha)`);
                         tasks.push({
                             type: 'harvesting',

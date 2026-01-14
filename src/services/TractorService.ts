@@ -412,8 +412,53 @@ export class TractorService {
                 response = await this.api.getFarmlandActionSeed(farmlandId, farmId, area, complexityIndex);
             } else if (opType === 'plowing') {
                 response = await this.api.getFarmlandActionPlow(farmlandId, farmId, area, complexityIndex);
+            } else if (opType === 'harvesting') {
+                // Para harvesting: buscar colheitadeiras disponíveis e aplicar verificação de ociosidade
+                const equipment = await this.getEquipmentForFarmland(farmlandId, opType);
+                if (!equipment) return null;
+
+                // Montar lista de colheitadeiras disponíveis
+                const harvesters: { tractorId: number; implementId?: number; haHour: number }[] = [
+                    { tractorId: equipment.tractorId, implementId: equipment.implementId, haHour: equipment.haHour }
+                ];
+
+                // TODO: Em uma implementação futura, buscar todas as colheitadeiras disponíveis
+                // Por agora, usar apenas a melhor colheitadeira encontrada
+
+                // Verificar operações pendentes (campos em maturação) para não deixar ociosos
+                const pendingOps = await this.getPendingOperationsInFarm(farmId);
+                const maturingFields = pendingOps.filter(op => op.opType === 'harvesting');
+
+                if (maturingFields.length > 0 && harvesters.length > 0) {
+                    // Verificar se algum campo vai precisar de colheitadeira em breve
+                    const estimatedDuration = equipment.estimatedDuration;
+
+                    for (const maturing of maturingFields) {
+                        const timeUntilMature = maturing.opTimeRemain;
+                        const potentialIdleTime = estimatedDuration - timeUntilMature;
+
+                        if (potentialIdleTime > maxIdleTimeMinutes * 60 && potentialIdleTime > 0) {
+                            this.logger.info(
+                                `⚠️ Campo "${maturing.farmlandName}" vai precisar de colheita em ` +
+                                `${Math.ceil(timeUntilMature / 60)}min. Considerando isso na alocação.`
+                            );
+                        }
+                    }
+                }
+
+                this.logger.debugLog(
+                    `[Harvester] Usando colheitadeira ${equipment.tractorId} ` +
+                    `(${equipment.haHour} ha/h, ~${Math.ceil(equipment.estimatedDuration / 60)}min)`
+                );
+
+                return {
+                    tractors: harvesters,
+                    totalHaHour: equipment.haHour,
+                    estimatedDuration: equipment.estimatedDuration,
+                    opType,
+                };
             } else {
-                // Para harvesting e clearing, usar lógica simples (equipamento único)
+                // Para clearing, usar lógica simples (equipamento único)
                 const equipment = await this.getEquipmentForFarmland(farmlandId, opType);
                 if (!equipment) return null;
                 return {
@@ -493,9 +538,9 @@ export class TractorService {
             let tractorsToUse = usableTractors.slice(0, maxTractors);
 
             if (pendingOps.length > 0 && tractorsToUse.length > 1) {
-                // Calcular tempo de operação com N tratores
+                // Calcular tempo de operação com N tratores (haHour já considera complexidade)
                 const totalHaHour = tractorsToUse.reduce((sum, t) => sum + t.haHour, 0);
-                const operationTimeSeconds = (area * complexityIndex) / totalHaHour * 3600;
+                const operationTimeSeconds = (area / totalHaHour) * 3600;
 
                 // Verificar se alguma operação pendente vai precisar de trator
                 for (const pending of pendingOps) {
@@ -519,7 +564,8 @@ export class TractorService {
 
             // 8. Calcular totais finais
             const finalTotalHaHour = tractorsToUse.reduce((sum, t) => sum + t.haHour, 0);
-            const estimatedDuration = Math.ceil((area * complexityIndex) / finalTotalHaHour * 3600);
+            // Nota: haHour já considera a complexidade do terreno, não multiplicar por complexityIndex
+            const estimatedDuration = Math.ceil((area / finalTotalHaHour) * 3600);
 
             this.logger.info(
                 `🚜 Multi-tractor: Usando ${tractorsToUse.length} trator(es) para ${opType} ` +

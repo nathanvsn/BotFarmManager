@@ -192,7 +192,12 @@ export class FarmBot {
                 return this.executeMultiTractorTask(task);
             }
 
-            // Para harvesting e clearing, usar lógica simples
+            // Para harvesting, usar método com múltiplas colheitadeiras e verificação de ociosidade
+            if (task.type === 'harvesting') {
+                return this.executeMultiHarvesterTask(task);
+            }
+
+            // Para clearing, usar lógica simples (equipamento único)
             return this.executeSingleTractorTask(task);
         } catch (error) {
             this.logger.error(
@@ -276,7 +281,71 @@ export class FarmBot {
     }
 
     /**
-     * Executa uma tarefa com trator único (harvesting/clearing)
+     * Executa uma tarefa de colheita com múltiplas colheitadeiras
+     * Considera verificação de ociosidade (campos em maturação)
+     */
+    private async executeMultiHarvesterTask(task: AvailableTask): Promise<boolean> {
+        // Obter colheitadeiras otimizadas com verificação de ociosidade
+        const optimal = await this.tractorService.getOptimalTractorsForOperation(
+            task.farmlandId,
+            task.farmId,
+            task.area,
+            task.complexityIndex,
+            'harvesting',
+            this.config.maxTractorsPerOp,
+            this.config.maxIdleTimeMinutes
+        );
+
+        if (!optimal || optimal.tractors.length === 0) {
+            this.logger.warn(`Nenhuma colheitadeira disponível para ${task.farmlandName}`);
+            return false;
+        }
+
+        // Verificar tempo máximo de operação (6 horas = 21600 segundos)
+        const MAX_OPERATION_HOURS = 6;
+        const MAX_OPERATION_SECONDS = MAX_OPERATION_HOURS * 3600;
+
+        if (optimal.estimatedDuration > MAX_OPERATION_SECONDS) {
+            const estimatedHours = (optimal.estimatedDuration / 3600).toFixed(1);
+            this.logger.warn(
+                `⏱️ Colheita em "${task.farmlandName}" ignorada: tempo estimado de ${estimatedHours}h excede o limite de ${MAX_OPERATION_HOURS}h.`
+            );
+            return false;
+        }
+
+        // Para colheita, usar o endpoint específico com uma colheitadeira
+        // (A API de harvest não suporta múltiplas colheitadeiras por operação no mesmo endpoint)
+        const bestHarvester = optimal.tractors[0];
+
+        const result = await this.api.startHarvestAction(
+            task.userFarmlandId,
+            bestHarvester.tractorId
+        );
+
+        this.logger.debugLog(`Resultado da colheita: ${JSON.stringify(result)}`);
+
+        if (result.failed === 0) {
+            const taskResult = result.result?.[String(task.userFarmlandId)];
+            const timeMinutes = Math.ceil((taskResult?.opTimeRemain || 0) / 60);
+            this.logger.success(
+                `🌾 Colheita iniciada em "${task.farmlandName}" - ~${timeMinutes}min`
+            );
+
+            // Registrar colheita no cache de 6 horas
+            this.farmService.recordHarvest(task.userFarmlandId);
+
+            return true;
+        } else {
+            const errorMsg = result.errors?.join(', ') || 'Erro desconhecido';
+            this.logger.warn(
+                `Falha ao colher "${task.farmlandName}": ${errorMsg}`
+            );
+            return false;
+        }
+    }
+
+    /**
+     * Executa uma tarefa com trator único (clearing)
      */
     private async executeSingleTractorTask(task: AvailableTask): Promise<boolean> {
         // Obter equipamento disponível
@@ -333,6 +402,12 @@ export class FarmBot {
             this.logger.success(
                 `${task.type} iniciado em "${task.farmlandName}" - Tempo estimado: ${taskResult?.opTimeRemain || 'N/A'}s`
             );
+
+            // Registrar colheita no cache de 6 horas
+            if (task.type === 'harvesting') {
+                this.farmService.recordHarvest(task.userFarmlandId);
+            }
+
             return true;
         } else {
             const errorMsg = result.errors?.join(', ') || 'Erro desconhecido';
